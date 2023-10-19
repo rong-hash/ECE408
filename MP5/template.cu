@@ -54,15 +54,18 @@ int main(int argc, char **argv) {
 
   wbTime_start(GPU, "Allocating GPU memory.");
   //@@ Allocate GPU memory here
+  cudaMalloc((void**)deviceInput, numInputElements * sizeof(float));
+  cudaMalloc((void**)deviceOutput, numOutputElements * sizeof(float));
+
 
   wbTime_stop(GPU, "Allocating GPU memory.");
 
   wbTime_start(GPU, "Copying input memory to the GPU.");
   //@@ Copy memory to the GPU here
-
+  cudaMemcpy(deviceInput, hostInput, numInputElements * sizeof(float), cudaMemcpyHostToDevice);
   wbTime_stop(GPU, "Copying input memory to the GPU.");
   //@@ Initialize the grid and block dimensions here
-
+  
   wbTime_start(Compute, "Performing CUDA computation");
   //@@ Launch the GPU Kernel here
 
