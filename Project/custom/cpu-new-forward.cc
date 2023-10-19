@@ -34,6 +34,23 @@ void conv_forward_cpu(float *output, const float *input, const float *mask, cons
   #define mask_4d(i3, i2, i1, i0) mask[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
 
   // Insert your CPU convolution kernel code here
+  for (int i3 = 0; i3 < B; i3++){
+    for (int i2 = 0; i2 < M; i2++){
+      for (int i1 = 0; i1 < H_out; i1++){
+        for (int i0 = 0; i0 < W_out; i0++){
+          float sum = 0;
+          for (int j2 = 0; j2 < C; j2++){
+            for (int j1 = 0; j1 < K; j1++){
+              for (int j0 = 0; j0 < K; j0++){
+                sum += in_4d(i3, j2, S*i1+j1, S*i0+j0) * mask_4d(i2, j2, j1, j0);
+              }
+            }
+          }
+          out_4d(i3, i2, i1, i0) = sum;
+        }
+      }
+    }
+  }
 
   
   #undef out_4d
