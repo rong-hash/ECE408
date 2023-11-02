@@ -2,6 +2,10 @@
 #include <iostream>
 #include "gpu-new-forward.h"
 
+#define TILE_WIDTH 16
+
+__constant__ float MASK[1024];
+
 __global__ void conv_forward_kernel(float *output, const float *input, const float *mask, const int B, const int M, const int C, const int H, const int W, const int K,const int S)
 {
     /*
@@ -24,8 +28,8 @@ __global__ void conv_forward_kernel(float *output, const float *input, const flo
 
     const int H_out = (H - K)/S + 1;
     const int W_out = (W - K)/S + 1;
-    (void)H_out; // silence declared but never referenced warning. remove this line when you start working
-    (void)W_out; // silence declared but never referenced warning. remove this line when you start working
+    // (void)H_out; // silence declared but never referenced warning. remove this line when you start working
+    // (void)W_out; // silence declared but never referenced warning. remove this line when you start working
 
     // We have some nice #defs for you below to simplify indexing. Feel free to use them, or create your own.
     // An example use of these macros:
@@ -37,8 +41,27 @@ __global__ void conv_forward_kernel(float *output, const float *input, const flo
     #define mask_4d(i3, i2, i1, i0) mask[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
 
     // Insert your GPU convolution kernel code here
-
-
+    int W_grid = ceil((float)((W - K)/S + 1)/TILE_WIDTH);
+    int H_grid = ceil((float)((W - K)/S + 1)/TILE_WIDTH);
+    int b = blockIdx.x;
+    int m = blockIdx.y;
+    int h = (blockIdx.z / W_grid) * TILE_WIDTH + threadIdx.y;
+    int w = (blockIdx.z % W_grid) * TILE_WIDTH + threadIdx.x;
+    float acc = 0.0f;
+    if (h < H_out && w < W_out){
+        for (int c = 0; c < C; c++) {
+            for (int p = 0; p < K; p++) {
+                for (int q = 0; q < K; q++) {
+                    int in_h = h* S + p;
+                    int in_w = w * S + q;
+                    if (in_h < H && in_w < W) {
+                        acc += in_4d(b, c, in_h, in_w) * mask_4d(m, c, p, q);
+                    }
+                }
+            }
+        }
+        out_4d(b, m, h, w) = acc;
+    }
 
 
     #undef out_4d
@@ -61,6 +84,12 @@ __host__ void GPUInterface::conv_forward_gpu_prolog(const float *host_output, co
     //     std::cout<<"CUDA error: "<<cudaGetErrorString(error)<<std::endl;
     //     exit(-1);
     // }
+
+    cudaMalloc((void**)device_output_ptr, B * M * ((H - K)/S + 1) * ((W - K)/S + 1) * sizeof(float));
+    cudaMalloc((void**)device_input_ptr, B * C * H * W * sizeof(float));
+    cudaMalloc((void**)device_mask_ptr, M * C * K * K * sizeof(float));
+    cudaMemcpy(*device_input_ptr, host_input, B * C * H * W * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(*device_mask_ptr, host_mask, M * C * K * K * sizeof(float), cudaMemcpyHostToDevice);
    
 }
 
@@ -68,7 +97,12 @@ __host__ void GPUInterface::conv_forward_gpu_prolog(const float *host_output, co
 __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *device_input, const float *device_mask, const int B, const int M, const int C, const int H, const int W, const int K, const int S)
 {
     // Set the kernel dimensions and call the kernel
-    
+    int W_grid = ceil((float)((W - K)/S + 1)/TILE_WIDTH);
+    int H_grid = ceil((float)((W - K)/S + 1)/TILE_WIDTH);
+    int Y = W_grid * H_grid;
+    dim3 dimgrid(B, M, Y);
+    dim3 dimblock(TILE_WIDTH, TILE_WIDTH, 1);
+    conv_forward_kernel<<<dimgrid, dimblock>>>(device_output, device_input, device_mask, B, M, C, H, W, K, S);
 
 }
 
@@ -76,10 +110,11 @@ __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *
 __host__ void GPUInterface::conv_forward_gpu_epilog(float *host_output, float *device_output, float *device_input, float *device_mask, const int B, const int M, const int C, const int H, const int W, const int K, const int S)
 {
     // Copy the output back to host
-
+    cudaMemcpy(host_output, device_output, B * M * ((W - K)/S + 1) * ((W - K)/S + 1) * sizeof(float), cudaMemcpyDeviceToHost);
    
     // Free device memory
-    
+    cudaFree(device_output);
+    cudaFree(device_input);
 
 }
 
