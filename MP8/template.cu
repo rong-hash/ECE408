@@ -1,4 +1,5 @@
 #include <wb.h>
+#define BLOCK_SIZE 128
 
 #define wbCheck(stmt)                                                     \
   do {                                                                    \
@@ -14,6 +15,16 @@ __global__ void spmvJDSKernel(float *out, int *matColStart, int *matCols,
                               int *matRowPerm, int *matRows,
                               float *matData, float *vec, int dim) {
   //@@ insert spmv kernel for jds format
+  int row = blockIdx.x * blockDim.x + threadIdx.x;
+  if (row < dim) {
+    float dot = 0; 
+    unsigned sec = 0;
+    while (sec < matRows[row]) {
+      dot += matData[matColStart[sec] + row] * vec[matCols[matColStart[sec] + row]];
+      sec++;
+    }
+    out[matRowPerm[row]] = dot;
+  }
 }
 
 static void spmvJDS(float *out, int *matColStart, int *matCols,
@@ -21,6 +32,10 @@ static void spmvJDS(float *out, int *matColStart, int *matCols,
                     float *vec, int dim) {
 
   //@@ invoke spmv kernel for jds format
+  dim3 dimGrid(ceil(dim / (float)BLOCK_SIZE), 1, 1);
+  dim3 dimBlock(BLOCK_SIZE, 1, 1);
+  spmvJDSKernel<<<dimGrid, dimBlock>>>(out, matColStart, matCols, matRowPerm, matRows, matData, vec, dim);
+  
 }
 
 int main(int argc, char **argv) {
@@ -60,7 +75,6 @@ int main(int argc, char **argv) {
   CSRToJDS(dim, hostCSRRows, hostCSRCols, hostCSRData, &hostJDSRowPerm, &hostJDSRows,
            &hostJDSColStart, &hostJDSCols, &hostJDSData);
   maxRowNNZ = hostJDSRows[0];
-
   wbTime_start(GPU, "Allocating GPU memory.");
   cudaMalloc((void **)&deviceJDSColStart, sizeof(int) * maxRowNNZ);
   cudaMalloc((void **)&deviceJDSCols, sizeof(int) * ndata);
@@ -91,7 +105,6 @@ int main(int argc, char **argv) {
   wbTime_start(Copy, "Copying output memory to the CPU");
   cudaMemcpy(hostOutput, deviceOutput, sizeof(float) * dim, cudaMemcpyDeviceToHost);
   wbTime_stop(Copy, "Copying output memory to the CPU");
-
   wbTime_start(GPU, "Freeing GPU Memory");
   cudaFree(deviceVector);
   cudaFree(deviceOutput);
