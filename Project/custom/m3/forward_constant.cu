@@ -42,7 +42,7 @@ __global__ void conv_forward_kernel(float *output, const float *input, const flo
 
     // Insert your GPU convolution kernel code here
     int W_grid = ceil((float)((W - K)/S + 1)/TILE_WIDTH);
-    int H_grid = ceil((float)((W - K)/S + 1)/TILE_WIDTH);
+    int H_grid = ceil((float)((H - K)/S + 1)/TILE_WIDTH);
     int b = blockIdx.x;
     int m = blockIdx.y;
     int h = (blockIdx.z / W_grid) * TILE_WIDTH + threadIdx.y;
@@ -100,7 +100,7 @@ __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *
 {
     // Set the kernel dimensions and call the kernel
     int W_grid = ceil((float)((W - K)/S + 1)/TILE_WIDTH);
-    int H_grid = ceil((float)((W - K)/S + 1)/TILE_WIDTH);
+    int H_grid = ceil((float)((H - K)/S + 1)/TILE_WIDTH);
     int Y = W_grid * H_grid;
     dim3 dimgrid(B, M, Y);
     dim3 dimblock(TILE_WIDTH, TILE_WIDTH, 1);
