@@ -2,12 +2,12 @@
 #include <iostream>
 #include "gpu-new-forward.h"
 
-#define TILE_WIDTH 16
+#define TILE_WIDTH 3
 
-__constant__ float MASK[7000];
+
 
 // Compute C = A * B
-__global__ void matrixMultiplyShared(const float *A, const float *B, float *C,
+__global__ void matrixMultiplyShared(float *A, float *B, float *C,
     int numARows, int numAColumns,
     int numBRows, int numBColumns,
     int numCRows, int numCColumns) {
@@ -46,7 +46,7 @@ __global__ void matrixMultiplyShared(const float *A, const float *B, float *C,
 }
 
 
-void unroll(int B, int C, int H, int W, int K, int S, const float* input, float* unrolled_input) {
+void unroll(int B, int C, int H, int W, int K, float* input, float* unrolled_input) {
     #define unrolled_3d(i2, i1, i0) unrolled_input[(i2) * (C * K * K * ((H - K)/S + 1) * ((W - K)/S + 1)) + (i1) * (((H - K)/S + 1) * ((W - K)/S + 1)) + i0]
     #define input_4d(i3, i2, i1, i0) input[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
     int H_out = (H - K) / S + 1;
@@ -60,7 +60,7 @@ void unroll(int B, int C, int H, int W, int K, int S, const float* input, float*
                         for (int w = 0; w < W_out; w++) {
                             int h_unroll = w_base + p * K + q;
                             int w_unroll = h * W_out + w;
-                            unrolled_3d(b, h_unroll, w_unroll) = input_4d(b, c, h * S + p, w * S + q);
+                            unrolled_3d(b, h_unroll, w_unroll) = input_4d(b, c, h * S + p, w * S + q)
                         }
                     }
                 }
@@ -102,7 +102,7 @@ __host__ void GPUInterface::conv_forward_gpu_prolog(const float *host_output, co
 __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *device_input, const float *device_mask, const int B, const int M, const int C, const int H, const int W, const int K, const int S)
 {
     // Set the kernel dimensions and call the kernel
-    dim3 dimGrid(B, ceil(((H - K)/S + 1) * ((W - K)/S + 1) / (float) TILE_WIDTH), ceil(M / (float) TILE_WIDTH));
+    dim3 dimGrid(B, ceil(M / (float) TILE_WIDTH), ceil(((H - K)/S + 1) * ((W - K)/S + 1) / (float) TILE_WIDTH));
     dim3 dimBlock(TILE_WIDTH, TILE_WIDTH, 1);
     matrixMultiplyShared<<<dimGrid, dimBlock>>>(device_mask, device_input, device_output, M, C * K * K, C * K * K, ((H - K)/S + 1) * ((W - K)/S + 1), M, ((H - K)/S + 1) * ((W - K)/S + 1));
 
