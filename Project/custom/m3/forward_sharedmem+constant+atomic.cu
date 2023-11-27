@@ -44,6 +44,7 @@ __global__ void conv_forward_kernel(float *output, const float *input, const flo
     #define in_4d(i3, i2, i1, i0) input[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
     #define mask_4d(i3, i2, i1, i0) MASK[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
     #define sm_3d(i2, i1, i0) sm[(i2) * (INPUT_TILE_WIDTH * INPUT_TILE_WIDTH) + (i1) * (INPUT_TILE_WIDTH) + i0]
+    #define sm_2d(i1, i0) sm[(i1) * (TILE_WIDTH) + i0]
 
 
     // Insert your GPU convolution kernel code here
@@ -53,6 +54,7 @@ __global__ void conv_forward_kernel(float *output, const float *input, const flo
     int m = blockIdx.y;
     int h = (blockIdx.z / W_grid) * TILE_WIDTH + threadIdx.y;
     int w = (blockIdx.z % W_grid) * TILE_WIDTH + threadIdx.x;
+    int c = threadIdx.z;
     int ty = threadIdx.y;
     int tx = threadIdx.x;
     float acc = 0.0f;
@@ -60,16 +62,14 @@ __global__ void conv_forward_kernel(float *output, const float *input, const flo
     int left_up_corner_h = ((blockIdx.z / W_grid) * TILE_WIDTH) * S;
     int left_up_corner_w = ((blockIdx.z % W_grid) * TILE_WIDTH) * S;
     // load the input tile
-    for (int c = 0; c < C; c++) {
-        for (int p = ty; p < INPUT_TILE_WIDTH; p += TILE_WIDTH) {
-            for (int q = tx; q < INPUT_TILE_WIDTH; q += TILE_WIDTH) {
-                int in_h = left_up_corner_h + p;
-                int in_w = left_up_corner_w + q;
-                if (in_h < H && in_w < W) {
-                    sm_3d(c, p, q) = in_4d(b, c, in_h, in_w);
-                } else {
-                    sm_3d(c, p, q) = 0.0f;
-                }
+    for (int p = ty; p < INPUT_TILE_WIDTH; p += TILE_WIDTH) {
+        for (int q = tx; q < INPUT_TILE_WIDTH; q += TILE_WIDTH) {
+            int in_h = left_up_corner_h + p;
+            int in_w = left_up_corner_w + q;
+            if (in_h < H && in_w < W) {
+                sm_3d(c, p, q) = in_4d(b, c, in_h, in_w);
+            } else {
+                sm_3d(c, p, q) = 0.0f;
             }
         }
     }
@@ -77,15 +77,12 @@ __global__ void conv_forward_kernel(float *output, const float *input, const flo
     __syncthreads();
 
     if (h < H_out && w < W_out){
-
-        for (int c = 0; c < C; c++) {
-            for (int p = 0; p < K; p++) {
-                for (int q = 0; q < K; q++) {
-                    acc += mask_4d(m, c, p, q) * sm_3d(c, ty * S + p, tx * S + q);
-                }
+        for (int p = 0; p < K; p++) {
+            for (int q = 0; q < K; q++) {
+                acc += mask_4d(m, c, p, q) * sm_3d(c, ty * S + p, tx * S + q);
             }
         }
-        out_4d(b, m, h, w) = acc;
+        atomicAdd(&out_4d(b, m, h, w), acc);
     }
 
 
@@ -93,6 +90,7 @@ __global__ void conv_forward_kernel(float *output, const float *input, const flo
     #undef in_4d
     #undef mask_4d
     #undef sm_3d
+    #undef sm_2d
 }
 
 	
@@ -130,7 +128,7 @@ __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *
     int Y = W_grid * H_grid;
     int shared_mem_size = C * (S * TILE_WIDTH + K - S) * (S * TILE_WIDTH + K - S) * sizeof(float);
     dim3 dimgrid(B, M, Y);
-    dim3 dimblock(TILE_WIDTH, TILE_WIDTH, 1);
+    dim3 dimblock(TILE_WIDTH, TILE_WIDTH, C);
     conv_forward_kernel<<<dimgrid, dimblock, shared_mem_size>>>(device_output, device_input, device_mask, B, M, C, H, W, K, S);
 
 }
