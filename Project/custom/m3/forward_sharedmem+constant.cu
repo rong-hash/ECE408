@@ -92,6 +92,7 @@ __global__ void conv_forward_kernel(float *output, const float *input, const flo
     #undef out_4d
     #undef in_4d
     #undef mask_4d
+    #undef sm_3d
 }
 
 	
