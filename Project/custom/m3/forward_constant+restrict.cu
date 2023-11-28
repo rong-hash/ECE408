@@ -6,7 +6,7 @@
 
 __constant__ float MASK[7000];
 
-__global__ void conv_forward_kernel(float* __restrict__ output, const float* __restrict__ input, const float* __restrict mask__, const int B, const int M, const int C, const int H, const int W, const int K,const int S)
+__global__ void conv_forward_kernel(float* __restrict__ output, const float* __restrict__ input, const float* __restrict__ mask, const int B, const int M, const int C, const int H, const int W, const int K,const int S)
 {
     /*
     Modify this function to implement the forward pass described in Chapter 16.
@@ -36,15 +36,9 @@ __global__ void conv_forward_kernel(float* __restrict__ output, const float* __r
     // float a = in_4d(0,0,0,0)
     // out_4d(0,0,0,0) = a
 
-    int INPUT_TILE_WIDTH = S * TILE_WIDTH + K - S;
-
-    extern __shared__ float sm[];
-
     #define out_4d(i3, i2, i1, i0) output[(i3) * (M * H_out * W_out) + (i2) * (H_out * W_out) + (i1) * (W_out) + i0]
     #define in_4d(i3, i2, i1, i0) input[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
     #define mask_4d(i3, i2, i1, i0) MASK[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
-    #define sm_3d(i2, i1, i0) sm[(i2) * (INPUT_TILE_WIDTH * INPUT_TILE_WIDTH) + (i1) * (INPUT_TILE_WIDTH) + i0]
-
 
     // Insert your GPU convolution kernel code here
     int W_grid = ceil((float)((W - K)/S + 1)/TILE_WIDTH);
@@ -53,105 +47,86 @@ __global__ void conv_forward_kernel(float* __restrict__ output, const float* __r
     int m = blockIdx.y;
     int h = (blockIdx.z / W_grid) * TILE_WIDTH + threadIdx.y;
     int w = (blockIdx.z % W_grid) * TILE_WIDTH + threadIdx.x;
-    int ty = threadIdx.y;
-    int tx = threadIdx.x;
     float acc = 0.0f;
-
-    int left_up_corner_h = ((blockIdx.z / W_grid) * TILE_WIDTH) * S;
-    int left_up_corner_w = ((blockIdx.z % W_grid) * TILE_WIDTH) * S;
-    // load the input tile
-    for (int c = 0; c < C; c++) {
-        for (int p = ty; p < INPUT_TILE_WIDTH; p += TILE_WIDTH) {
-            for (int q = tx; q < INPUT_TILE_WIDTH; q += TILE_WIDTH) {
-                int in_h = left_up_corner_h + p;
-                int in_w = left_up_corner_w + q;
-                if (in_h < H && in_w < W) {
-                    sm_3d(c, p, q) = in_4d(b, c, in_h, in_w);
-                } else {
-                    sm_3d(c, p, q) = 0.0f;
-                }
-            }
-        }
-    }
-
-    __syncthreads();
 
     if (K != 7){
         if (h < H_out && w < W_out){
-
             for (int c = 0; c < C; c++) {
                 for (int p = 0; p < K; p++) {
                     for (int q = 0; q < K; q++) {
-                        acc += mask_4d(m, c, p, q) * sm_3d(c, ty * S + p, tx * S + q);
+                        int in_h = h* S + p;
+                        int in_w = w * S + q;
+                        if (in_h < H && in_w < W) {
+                            acc += in_4d(b, c, in_h, in_w) * mask_4d(m, c, p, q);
+                        }
                     }
                 }
             }
             out_4d(b, m, h, w) = acc;
         }
     }
-    else {
-        // do the unrolling
+    else{
         if (h < H_out && w < W_out){
             for (int c = 0; c < C; c++) {
-                acc += mask_4d(m, c, 0, 0) * sm_3d(c, ty * S, tx * S);
-                acc += mask_4d(m, c, 0, 1) * sm_3d(c, ty * S, tx * S + 1);
-                acc += mask_4d(m, c, 0, 2) * sm_3d(c, ty * S, tx * S + 2);
-                acc += mask_4d(m, c, 0, 3) * sm_3d(c, ty * S, tx * S + 3);
-                acc += mask_4d(m, c, 0, 4) * sm_3d(c, ty * S, tx * S + 4);
-                acc += mask_4d(m, c, 0, 5) * sm_3d(c, ty * S, tx * S + 5);
-                acc += mask_4d(m, c, 0, 6) * sm_3d(c, ty * S, tx * S + 6);
-                acc += mask_4d(m, c, 1, 0) * sm_3d(c, ty * S + 1, tx * S);
-                acc += mask_4d(m, c, 1, 1) * sm_3d(c, ty * S + 1, tx * S + 1);
-                acc += mask_4d(m, c, 1, 2) * sm_3d(c, ty * S + 1, tx * S + 2);
-                acc += mask_4d(m, c, 1, 3) * sm_3d(c, ty * S + 1, tx * S + 3);
-                acc += mask_4d(m, c, 1, 4) * sm_3d(c, ty * S + 1, tx * S + 4);
-                acc += mask_4d(m, c, 1, 5) * sm_3d(c, ty * S + 1, tx * S + 5);
-                acc += mask_4d(m, c, 1, 6) * sm_3d(c, ty * S + 1, tx * S + 6);
-                acc += mask_4d(m, c, 2, 0) * sm_3d(c, ty * S + 2, tx * S);
-                acc += mask_4d(m, c, 2, 1) * sm_3d(c, ty * S + 2, tx * S + 1);
-                acc += mask_4d(m, c, 2, 2) * sm_3d(c, ty * S + 2, tx * S + 2);
-                acc += mask_4d(m, c, 2, 3) * sm_3d(c, ty * S + 2, tx * S + 3);
-                acc += mask_4d(m, c, 2, 4) * sm_3d(c, ty * S + 2, tx * S + 4);
-                acc += mask_4d(m, c, 2, 5) * sm_3d(c, ty * S + 2, tx * S + 5);
-                acc += mask_4d(m, c, 2, 6) * sm_3d(c, ty * S + 2, tx * S + 6);
-                acc += mask_4d(m, c, 3, 0) * sm_3d(c, ty * S + 3, tx * S);
-                acc += mask_4d(m, c, 3, 1) * sm_3d(c, ty * S + 3, tx * S + 1);
-                acc += mask_4d(m, c, 3, 2) * sm_3d(c, ty * S + 3, tx * S + 2);
-                acc += mask_4d(m, c, 3, 3) * sm_3d(c, ty * S + 3, tx * S + 3);
-                acc += mask_4d(m, c, 3, 4) * sm_3d(c, ty * S + 3, tx * S + 4);
-                acc += mask_4d(m, c, 3, 5) * sm_3d(c, ty * S + 3, tx * S + 5);
-                acc += mask_4d(m, c, 3, 6) * sm_3d(c, ty * S + 3, tx * S + 6);
-                acc += mask_4d(m, c, 4, 0) * sm_3d(c, ty * S + 4, tx * S);
-                acc += mask_4d(m, c, 4, 1) * sm_3d(c, ty * S + 4, tx * S + 1);
-                acc += mask_4d(m, c, 4, 2) * sm_3d(c, ty * S + 4, tx * S + 2);
-                acc += mask_4d(m, c, 4, 3) * sm_3d(c, ty * S + 4, tx * S + 3);
-                acc += mask_4d(m, c, 4, 4) * sm_3d(c, ty * S + 4, tx * S + 4);
-                acc += mask_4d(m, c, 4, 5) * sm_3d(c, ty * S + 4, tx * S + 5);
-                acc += mask_4d(m, c, 4, 6) * sm_3d(c, ty * S + 4, tx * S + 6);
-                acc += mask_4d(m, c, 5, 0) * sm_3d(c, ty * S + 5, tx * S);
-                acc += mask_4d(m, c, 5, 1) * sm_3d(c, ty * S + 5, tx * S + 1);
-                acc += mask_4d(m, c, 5, 2) * sm_3d(c, ty * S + 5, tx * S + 2);
-                acc += mask_4d(m, c, 5, 3) * sm_3d(c, ty * S + 5, tx * S + 3);
-                acc += mask_4d(m, c, 5, 4) * sm_3d(c, ty * S + 5, tx * S + 4);
-                acc += mask_4d(m, c, 5, 5) * sm_3d(c, ty * S + 5, tx * S + 5);
-                acc += mask_4d(m, c, 5, 6) * sm_3d(c, ty * S + 5, tx * S + 6);
-                acc += mask_4d(m, c, 6, 0) * sm_3d(c, ty * S + 6, tx * S);
-                acc += mask_4d(m, c, 6, 1) * sm_3d(c, ty * S + 6, tx * S + 1);
-                acc += mask_4d(m, c, 6, 2) * sm_3d(c, ty * S + 6, tx * S + 2);
-                acc += mask_4d(m, c, 6, 3) * sm_3d(c, ty * S + 6, tx * S + 3);
-                acc += mask_4d(m, c, 6, 4) * sm_3d(c, ty * S + 6, tx * S + 4);
-                acc += mask_4d(m, c, 6, 5) * sm_3d(c, ty * S + 6, tx * S + 5);
-                acc += mask_4d(m, c, 6, 6) * sm_3d(c, ty * S + 6, tx * S + 6);
+                // unroll the loop
+                acc += in_4d(b, c, h * S, w * S) * mask_4d(m, c, 0, 0);
+                acc += in_4d(b, c, h * S, w * S + 1) * mask_4d(m, c, 0, 1);
+                acc += in_4d(b, c, h * S, w * S + 2) * mask_4d(m, c, 0, 2);
+                acc += in_4d(b, c, h * S, w * S + 3) * mask_4d(m, c, 0, 3);
+                acc += in_4d(b, c, h * S, w * S + 4) * mask_4d(m, c, 0, 4);
+                acc += in_4d(b, c, h * S, w * S + 5) * mask_4d(m, c, 0, 5);
+                acc += in_4d(b, c, h * S, w * S + 6) * mask_4d(m, c, 0, 6);
+                acc += in_4d(b, c, h * S + 1, w * S) * mask_4d(m, c, 1, 0);
+                acc += in_4d(b, c, h * S + 1, w * S + 1) * mask_4d(m, c, 1, 1);
+                acc += in_4d(b, c, h * S + 1, w * S + 2) * mask_4d(m, c, 1, 2);
+                acc += in_4d(b, c, h * S + 1, w * S + 3) * mask_4d(m, c, 1, 3);
+                acc += in_4d(b, c, h * S + 1, w * S + 4) * mask_4d(m, c, 1, 4);
+                acc += in_4d(b, c, h * S + 1, w * S + 5) * mask_4d(m, c, 1, 5);
+                acc += in_4d(b, c, h * S + 1, w * S + 6) * mask_4d(m, c, 1, 6);
+                acc += in_4d(b, c, h * S + 2, w * S) * mask_4d(m, c, 2, 0);
+                acc += in_4d(b, c, h * S + 2, w * S + 1) * mask_4d(m, c, 2, 1);
+                acc += in_4d(b, c, h * S + 2, w * S + 2) * mask_4d(m, c, 2, 2);
+                acc += in_4d(b, c, h * S + 2, w * S + 3) * mask_4d(m, c, 2, 3);
+                acc += in_4d(b, c, h * S + 2, w * S + 4) * mask_4d(m, c, 2, 4);
+                acc += in_4d(b, c, h * S + 2, w * S + 5) * mask_4d(m, c, 2, 5);
+                acc += in_4d(b, c, h * S + 2, w * S + 6) * mask_4d(m, c, 2, 6);
+                acc += in_4d(b, c, h * S + 3, w * S) * mask_4d(m, c, 3, 0);
+                acc += in_4d(b, c, h * S + 3, w * S + 1) * mask_4d(m, c, 3, 1);
+                acc += in_4d(b, c, h * S + 3, w * S + 2) * mask_4d(m, c, 3, 2);
+                acc += in_4d(b, c, h * S + 3, w * S + 3) * mask_4d(m, c, 3, 3);
+                acc += in_4d(b, c, h * S + 3, w * S + 4) * mask_4d(m, c, 3, 4);
+                acc += in_4d(b, c, h * S + 3, w * S + 5) * mask_4d(m, c, 3, 5);
+                acc += in_4d(b, c, h * S + 3, w * S + 6) * mask_4d(m, c, 3, 6);
+                acc += in_4d(b, c, h * S + 4, w * S) * mask_4d(m, c, 4, 0);
+                acc += in_4d(b, c, h * S + 4, w * S + 1) * mask_4d(m, c, 4, 1);
+                acc += in_4d(b, c, h * S + 4, w * S + 2) * mask_4d(m, c, 4, 2);
+                acc += in_4d(b, c, h * S + 4, w * S + 3) * mask_4d(m, c, 4, 3);
+                acc += in_4d(b, c, h * S + 4, w * S + 4) * mask_4d(m, c, 4, 4);
+                acc += in_4d(b, c, h * S + 4, w * S + 5) * mask_4d(m, c, 4, 5);
+                acc += in_4d(b, c, h * S + 4, w * S + 6) * mask_4d(m, c, 4, 6);
+                acc += in_4d(b, c, h * S + 5, w * S) * mask_4d(m, c, 5, 0);
+                acc += in_4d(b, c, h * S + 5, w * S + 1) * mask_4d(m, c, 5, 1);
+                acc += in_4d(b, c, h * S + 5, w * S + 2) * mask_4d(m, c, 5, 2);
+                acc += in_4d(b, c, h * S + 5, w * S + 3) * mask_4d(m, c, 5, 3);
+                acc += in_4d(b, c, h * S + 5, w * S + 4) * mask_4d(m, c, 5, 4);
+                acc += in_4d(b, c, h * S + 5, w * S + 5) * mask_4d(m, c, 5, 5);
+                acc += in_4d(b, c, h * S + 5, w * S + 6) * mask_4d(m, c, 5, 6);
+                acc += in_4d(b, c, h * S + 6, w * S) * mask_4d(m, c, 6, 0);
+                acc += in_4d(b, c, h * S + 6, w * S + 1) * mask_4d(m, c, 6, 1);
+                acc += in_4d(b, c, h * S + 6, w * S + 2) * mask_4d(m, c, 6, 2);
+                acc += in_4d(b, c, h * S + 6, w * S + 3) * mask_4d(m, c, 6, 3);
+                acc += in_4d(b, c, h * S + 6, w * S + 4) * mask_4d(m, c, 6, 4);
+                acc += in_4d(b, c, h * S + 6, w * S + 5) * mask_4d(m, c, 6, 5);
+                acc += in_4d(b, c, h * S + 6, w * S + 6) * mask_4d(m, c, 6, 6);
             }
-            out_4d(b, m, h, w) = acc;
         }
     }
+
 
 
     #undef out_4d
     #undef in_4d
     #undef mask_4d
-    #undef sm_3d
 }
 
 	
@@ -187,10 +162,9 @@ __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *
     int W_grid = ceil((float)((W - K)/S + 1)/TILE_WIDTH);
     int H_grid = ceil((float)((H - K)/S + 1)/TILE_WIDTH);
     int Y = W_grid * H_grid;
-    int shared_mem_size = C * (S * TILE_WIDTH + K - S) * (S * TILE_WIDTH + K - S) * sizeof(float);
     dim3 dimgrid(B, M, Y);
     dim3 dimblock(TILE_WIDTH, TILE_WIDTH, 1);
-    conv_forward_kernel<<<dimgrid, dimblock, shared_mem_size>>>(device_output, device_input, device_mask, B, M, C, H, W, K, S);
+    conv_forward_kernel<<<dimgrid, dimblock>>>(device_output, device_input, device_mask, B, M, C, H, W, K, S);
 
 }
 
